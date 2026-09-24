@@ -1,56 +1,35 @@
 import json
 import os
-import faiss
+
 import numpy as np
-import ollama
 from datasets import load_dataset
 from evaluate import load
-from sentence_transformers import SentenceTransformer
+
+from rag import NaiveRAG
 
 # ---------------------------------------------------------
 # 1. SETUP & CONFIG
 # ---------------------------------------------------------
 EVAL_SAMPLES = 150
 TOP_K = 3
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama-service:11434")
 OUTPUT_FAILURE_PATH = "/app/data/failure_analysis.json"
 
 print(f"Loading SQuAD 2.0 validation split (First {EVAL_SAMPLES} samples)...")
 val_dataset = load_dataset("rajpurkar/squad_v2", split=f"validation[:{EVAL_SAMPLES}]")
 squad_metric = load("squad_v2")
 
-# De-duplicate unique contexts for corpus building
-unique_contexts = list(dict.fromkeys(val_dataset["context"]))
-context_to_id = {ctx: i for i, ctx in enumerate(unique_contexts)}
-print(f"Indexed {len(unique_contexts)} unique context paragraphs.")
+rag = NaiveRAG(
+    dataset="rajpurkar/squad_v2",
+    split=f"validation[:{EVAL_SAMPLES}]",
+    model_name="llama3.2:3b",
+    top_k=TOP_K,
+)
+
+context_to_id = {ctx: i for i, ctx in enumerate(rag.unique_contexts)}
+print(f"Indexed {len(rag.unique_contexts)} unique context paragraphs.")
 
 # ---------------------------------------------------------
-# 2. VECTOR INDEX CONSTRUCTION
-# ---------------------------------------------------------
-print("Generating corpus embeddings (BAAI/bge-small-en-v1.5)...")
-embedder = SentenceTransformer("BAAI/bge-small-en-v1.5")
-corpus_embeddings = embedder.encode(unique_contexts, normalize_embeddings=True)
-
-dimension = corpus_embeddings.shape[1]
-index = faiss.IndexFlatIP(dimension)  # Cosine similarity via Inner Product on unit vectors
-index.add(np.array(corpus_embeddings, dtype=np.float32))
-
-client = ollama.Client(host=OLLAMA_HOST)
-
-
-def raw_generate(prompt: str) -> str:
-    """Executes a raw completion without chat wrappers."""
-    response = client.generate(
-        model="llama3.2:3b",
-        prompt=prompt,
-        raw=True,
-        options={"temperature": 0.0, "num_predict": 64},
-    )
-    return response["response"].strip()
-
-
-# ---------------------------------------------------------
-# 3. EVALUATION LOOP
+# 2. EVALUATION LOOP
 # ---------------------------------------------------------
 print("\nStarting evaluation run...")
 
@@ -68,10 +47,10 @@ for idx, sample in enumerate(val_dataset):
     gold_context_id = context_to_id[gold_context]
 
     # --- RETRIEVAL ---
-    q_emb = embedder.encode([question], normalize_embeddings=True)
-    _, top_k_indices = index.search(np.array(q_emb, dtype=np.float32), TOP_K)
+    q_emb = rag.embedder.encode([question], normalize_embeddings=True)
+    _, top_k_indices = rag.index.search(np.array(q_emb, dtype=np.float32), TOP_K)
     retrieved_indices = top_k_indices[0].tolist()
-    retrieved_chunks = [unique_contexts[i] for i in retrieved_indices]
+    retrieved_chunks = [rag.unique_contexts[i] for i in retrieved_indices]
 
     # Retrieval Metrics (Recall@k & MRR)
     hit = gold_context_id in retrieved_indices
@@ -84,25 +63,7 @@ for idx, sample in enumerate(val_dataset):
         mrr_list.append(0.0)
 
     # --- GENERATION ---
-    context_str = "\n\n".join(retrieved_chunks)
-    # prompt = (
-    #     f"Context:\n{context_str}\n\n"
-    #     f"Answer the question using ONLY the context provided. "
-    #     f"If the answer cannot be found in the context, write 'Unanswerable'.\n\n"
-    #     f"Question: {question}\nAnswer:"
-    # )
-    prompt = (
-        f"Context:\n{context_str}\n\n"
-        f"Instructions:\n"
-        f"- Answer the question using ONLY an exact short phrase or word directly from the context.\n"
-        f"- If the question cannot be answered using the context, respond with EXACTLY 'Unanswerable'.\n"
-        f"- Do not write full sentences or explanations.\n\n"
-        f"Question: {question}\n"
-        f"Answer:"
-    )
-
-    raw_output = raw_generate(prompt)
-    generated_answer = clean_completion(raw_output)
+    prompt, generated_answer, retrieved_chunks = rag.run(question, top_k=TOP_K)
 
     # Prepare for HF Evaluate squad_v2 format
     predictions.append({"id": q_id, "prediction_text": generated_answer, "no_answer_probability": 0.0})
@@ -140,7 +101,7 @@ for idx, sample in enumerate(val_dataset):
         print(f"Processed {idx + 1}/{EVAL_SAMPLES} samples...")
 
 # ---------------------------------------------------------
-# 4. METRIC COMPUTATION & FAILURE ANALYSIS DUMP
+# 3. METRIC COMPUTATION & FAILURE ANALYSIS DUMP
 # ---------------------------------------------------------
 results = squad_metric.compute(predictions=predictions, references=references)
 
