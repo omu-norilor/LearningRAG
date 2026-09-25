@@ -12,7 +12,7 @@ from rag import NaiveRAG
 # ---------------------------------------------------------
 EVAL_SAMPLES = 150
 TOP_K = 3
-OUTPUT_FAILURE_PATH = "/app/data/failure_analysis.json"
+OUTPUT_FAILURE_PATH = "/app/data/failure_analysis_naive.json"
 
 print(f"Loading SQuAD 2.0 validation split (First {EVAL_SAMPLES} samples)...")
 val_dataset = load_dataset("rajpurkar/squad_v2", split=f"validation[:{EVAL_SAMPLES}]")

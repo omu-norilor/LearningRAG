@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
       sentence-transformers \
       datasets \
       evaluate \
-      huggingface_hub
+      huggingface_hub \ 
+      rank_bm25
 
 CMD ["bash"]
