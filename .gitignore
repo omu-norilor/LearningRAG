@@ -1,3 +1,5 @@
 *.gguf
 __pycache__/
 .venv/
+*.go
+*.mod
