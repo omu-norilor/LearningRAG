@@ -1,4 +1,3 @@
-# code/src/bootstrap_data.py
 import datasets
 import evaluate
 from sentence_transformers import SentenceTransformer

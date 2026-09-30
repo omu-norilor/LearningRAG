@@ -1,14 +1,18 @@
 import os
 import faiss
+import sys
 import numpy as np
 import ollama
 import random
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
-from rag import HybridRAG
+
+# Append the parent directory (..) to sys.path so Python can locate the 'src' package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.rag_classes.hybrid_advanced import AdvancedHybridRAG
 
 # Init the RAG system
-rag=HybridRAG(
+rag=AdvancedHybridRAG(
             dataset="rajpurkar/squad_v2",  
             split="validation[:200]",
             model_name="llama3.2:3b", 

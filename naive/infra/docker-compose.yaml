@@ -6,6 +6,7 @@ services:
     container_name: rag-dev
     volumes:
       - ../code/src:/app/src
+      - ../code/tests:/app/tests
       - ../data:/app/data
       - ../models:/app/models
       - hf-cache:/root/.cache/huggingface

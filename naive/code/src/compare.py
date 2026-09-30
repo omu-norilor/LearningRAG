@@ -1,39 +1,26 @@
-# code/src/compare_rag.py
+import os
+import sys
+import string
+import re
 import numpy as np
 from datasets import load_dataset
 from evaluate import load
-from rag import NaiveRAG, HybridRAG
+from rag_classes.naive import NaiveRAG
+from rag_classes.hybrid import HybridRAG
+from rag_classes.hybrid_advanced import AdvancedHybridRAG
+from metrics import evaluate
 
-# Load 150 answerable questions
+
+
+# --- Execution Script ---
+# Load 50 answerable questions for testing
 ds = load_dataset("rajpurkar/squad_v2", split="validation")
-answerable_ds = ds.filter(lambda x: len(x["answers"]["text"]) > 0).select(range(150))
+answerable_ds = ds.filter(lambda x: len(x["answers"]["text"]) > 0).select(range(50))
 
-squad_metric = load("squad_v2")
+naive = NaiveRAG(dataset="rajpurkar/squad_v2", split="validation", top_k=3)
+hybrid = HybridRAG(dataset="rajpurkar/squad_v2", split="validation", top_k=3)
+advanced_hybrid = AdvancedHybridRAG(dataset="rajpurkar/squad_v2", split="validation", top_k=3)
 
-def evaluate_rag(rag_instance, dataset, name="RAG"):
-    predictions = []
-    references = []
-    
-    print(f"\n--- Running Evaluation for {name} ---")
-    for sample in dataset:
-        prompt, answer, chunks = rag_instance.run(sample["question"])
-        
-        predictions.append({
-            "id": sample["id"],
-            "prediction_text": answer,
-            "no_answer_probability": 0.0
-        })
-        references.append({
-            "id": sample["id"],
-            "answers": sample["answers"]
-        })
-        
-    results = squad_metric.compute(predictions=predictions, references=references)
-    print(f"[{name}] Exact Match: {results['exact']:.2f}% | F1: {results['f1']:.2f}%")
-    return results
-
-naive = NaiveRAG()
-hybrid = HybridRAG()
-
-evaluate_rag(naive, answerable_ds, "Naive RAG (Dense)")
-evaluate_rag(hybrid, answerable_ds, "Hybrid RAG (BM25 + Dense)")
+evaluate(naive, answerable_ds, "Naive RAG (Dense)")
+evaluate(hybrid, answerable_ds, "Hybrid RAG (BM25 + Dense)")
+evaluate(advanced_hybrid, answerable_ds, "Advanced Hybrid RAG (Cross-Encoder)")

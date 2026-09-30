@@ -1,11 +1,15 @@
 import os
+import sys
 import faiss
 import numpy as np
 import ollama
 import random
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
-from rag import NaiveRAG
+
+# Append the parent directory (..) to sys.path so Python can locate the 'src' package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from src.rag_classes.naive import NaiveRAG
 
 # Init the RAG system
 rag=NaiveRAG(
