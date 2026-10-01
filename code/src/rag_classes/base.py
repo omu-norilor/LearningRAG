@@ -1,4 +1,5 @@
 import os
+import sys
 import faiss
 import numpy as np
 import ollama
@@ -6,6 +7,10 @@ import random
 from datasets import load_dataset
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
+
+# append sys path to locate the 'src' package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from constants import HF_TOKEN
 
 
 class BaseRAG:
@@ -25,16 +30,21 @@ class BaseRAG:
         model_name: str = "llama3.2:3b",
         embedding_model: str = "BAAI/bge-small-en-v1.5",
     ):
+        # Force offline mode to use local cache and avoid name resolution timeouts
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
         self.top_k = top_k
         self.client = ollama.Client(host=os.getenv("OLLAMA_HOST", "http://ollama-service:11434"))
-        self.embedder = SentenceTransformer(embedding_model)
+        
+        # Load embedder with local_files_only=True to strictly hit cache
+        self.embedder = SentenceTransformer(embedding_model, local_files_only=True, token=HF_TOKEN)
+
         self.dataset = dataset
         self.split = split
         self.model_name = model_name
 
-        # Subclass must implement build_index(); it should set self.unique_contexts
-        # and at minimum `self.dense_index`. For backward compatibility, subclasses
-        # should also set `self.index = self.dense_index`.
+        # Subclass must implement build_index()
         self.build_index()
 
     def build_index(self):

@@ -10,6 +10,8 @@ from sentence_transformers import SentenceTransformer
 # Append the parent directory (..) to sys.path so Python can locate the 'src' package
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.rag_classes.hybrid import HybridRAG
+from src.constants import HF_TOKEN
+
 
 # Init the RAG system
 rag=HybridRAG(
@@ -20,7 +22,7 @@ rag=HybridRAG(
             )
 
 # Test Run
-dataset = load_dataset("rajpurkar/squad_v2", split="validation[:200]")
+dataset = load_dataset("rajpurkar/squad_v2", split="validation[:200]", token=HF_TOKEN)
 sample = dataset[random.randint(0, len(dataset) - 1)]
 prompt, completion, retrieved = rag.run(sample["question"], top_k=3)
 

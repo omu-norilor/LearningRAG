@@ -1,4 +1,6 @@
 import os
+import sys
+
 import faiss
 import numpy as np
 import ollama
@@ -7,6 +9,11 @@ from datasets import load_dataset
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
 from .base import BaseRAG
+
+# append sys path to locate the 'src' package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from constants import HF_TOKEN
+
 
 class NaiveRAG(BaseRAG):
     def __init__(
@@ -21,7 +28,12 @@ class NaiveRAG(BaseRAG):
 
     def build_index(self):
         print("Loading SQuAD 2.0 validation split...")
-        dataset = load_dataset(self.dataset, split=self.split)
+        dataset = load_dataset(
+            self.dataset, 
+            split=self.split, 
+            download_mode="reuse_cache_if_exists", 
+            verification_mode="no_checks"
+        )
         unique_contexts = list(dict.fromkeys(dataset["context"]))
         print(f"Extracted {len(unique_contexts)} unique context paragraphs.")
 

@@ -1,4 +1,5 @@
 import os
+import sys
 import faiss
 import numpy as np
 import ollama
@@ -8,6 +9,10 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
 from .hybrid import HybridRAG
 
+# append sys path to locate the 'src' package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from constants import HF_TOKEN
+
 
 class AdvancedHybridRAG(HybridRAG):
     def __init__(
@@ -16,6 +21,8 @@ class AdvancedHybridRAG(HybridRAG):
         top_k_dense: int = 30,
         top_k_sparse: int = 30,
         rrf_k: int = 60,
+        dense_weight: float = 0.7,
+        sparse_weight: float = 0.3,
         dataset: str = "rajpurkar/squad_v2",
         split: str = "validation[:200]",
         model_name: str = "llama3.2:3b",
@@ -31,6 +38,8 @@ class AdvancedHybridRAG(HybridRAG):
             top_k_dense=top_k_dense,
             top_k_sparse=top_k_sparse,
             rrf_k=rrf_k,
+            dense_weight=dense_weight,
+            sparse_weight=sparse_weight,
             dataset=dataset,
             split=split,
             model_name=model_name,
@@ -39,6 +48,7 @@ class AdvancedHybridRAG(HybridRAG):
         
         print(f"Loading Cross-Encoder ({self.reranker_model})...")
         self.reranker = CrossEncoder(self.reranker_model)
+
 
     def retrieve(self, question: str, k: int | None = None) -> list[str]:
         k = k if k is not None else self.top_k

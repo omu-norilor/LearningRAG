@@ -7,12 +7,15 @@ services:
     volumes:
       - ../code/src:/app/src
       - ../code/tests:/app/tests
+      - ../code/pyproject.toml:/app/pyproject.toml:ro
+      - ../code/.env:/app/.env:ro
       - ../data:/app/data
       - ../models:/app/models
       - hf-cache:/root/.cache/huggingface
     environment:
       - OLLAMA_HOST=http://ollama-service:11434
       - HF_HOME=/root/.cache/huggingface
+      - PYTHONPATH=/app/src
     tty: true
     stdin_open: true
 
@@ -23,6 +26,8 @@ services:
       - "11435:11434"
     volumes:
       - ollama-data:/root/.ollama
+    devices:
+      - nvidia.com/gpu=all
 
 volumes:
   hf-cache:

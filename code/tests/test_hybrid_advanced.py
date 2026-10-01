@@ -1,6 +1,6 @@
 import os
-import sys
 import faiss
+import sys
 import numpy as np
 import ollama
 import random
@@ -9,10 +9,12 @@ from sentence_transformers import SentenceTransformer
 
 # Append the parent directory (..) to sys.path so Python can locate the 'src' package
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.rag_classes.naive import NaiveRAG
+from src.rag_classes.hybrid_advanced import AdvancedHybridRAG
+from src.constants import HF_TOKEN
+
 
 # Init the RAG system
-rag=NaiveRAG(
+rag=AdvancedHybridRAG(
             dataset="rajpurkar/squad_v2",  
             split="validation[:200]",
             model_name="llama3.2:3b", 
@@ -20,7 +22,7 @@ rag=NaiveRAG(
             )
 
 # Test Run
-dataset = load_dataset("rajpurkar/squad_v2", split="validation[:200]")
+dataset = load_dataset("rajpurkar/squad_v2", split="validation[:200]", token=HF_TOKEN)
 sample = dataset[random.randint(0, len(dataset) - 1)]
 prompt, completion, retrieved = rag.run(sample["question"], top_k=3)
 

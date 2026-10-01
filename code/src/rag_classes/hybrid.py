@@ -1,4 +1,5 @@
 import os
+import sys
 import faiss
 import numpy as np
 import ollama
@@ -8,6 +9,10 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
 from .base import BaseRAG
 
+# append sys path to locate the 'src' package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from constants import HF_TOKEN
+
 
 class HybridRAG(BaseRAG):
     def __init__(
@@ -16,6 +21,8 @@ class HybridRAG(BaseRAG):
         top_k_dense: int = 20,
         top_k_sparse: int = 20,
         rrf_k: int = 60,
+        dense_weight: float = 0.7,
+        sparse_weight: float = 0.3,
         dataset: str = "rajpurkar/squad_v2",
         split: str = "validation[:200]",
         model_name: str = "llama3.2:3b",
@@ -25,12 +32,19 @@ class HybridRAG(BaseRAG):
         self.top_k_dense = top_k_dense
         self.top_k_sparse = top_k_sparse
         self.rrf_k = rrf_k
+        self.dense_weight = dense_weight
+        self.sparse_weight = sparse_weight
 
         super().__init__(top_k=top_k, dataset=dataset, split=split, model_name=model_name, embedding_model=embedding_model)
 
     def build_index(self):
         print(f"Loading {self.dataset} dataset ({self.split})...")
-        dataset = load_dataset(self.dataset, split=self.split)
+        dataset = load_dataset(
+            self.dataset, 
+            split=self.split, 
+            download_mode="reuse_cache_if_exists", 
+            verification_mode="no_checks"
+        )
         unique_contexts = list(dict.fromkeys(dataset["context"]))
         print(f"Extracted {len(unique_contexts)} unique context paragraphs.")
 
@@ -55,18 +69,20 @@ class HybridRAG(BaseRAG):
 
         return unique_contexts, dense_index, bm25_index
 
+
     def reciprocal_rank_fusion(self, dense_ranks: list[int], sparse_ranks: list[int]) -> list[int]:
-        """Fuses dense and sparse rank lists using Reciprocal Rank Fusion (RRF)."""
+        """Fuses dense and sparse rank lists using Weighted Reciprocal Rank Fusion (RRF)."""
         scores: dict[int, float] = {}
 
         for rank, doc_id in enumerate(dense_ranks):
-            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (self.rrf_k + rank + 1)
+            scores[doc_id] = scores.get(doc_id, 0.0) + self.dense_weight * (1.0 / (self.rrf_k + rank + 1)) # <-- UPDATED
 
         for rank, doc_id in enumerate(sparse_ranks):
-            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (self.rrf_k + rank + 1)
+            scores[doc_id] = scores.get(doc_id, 0.0) + self.sparse_weight * (1.0 / (self.rrf_k + rank + 1)) # <-- UPDATED
 
         sorted_docs = sorted(scores.items(), key=lambda item: item[1], reverse=True)
         return [doc_id for doc_id, _ in sorted_docs[: self.top_k]]
+
 
     def retrieve(self, question: str, k: int | None = None) -> list[str]:
         k = k if k is not None else self.top_k
