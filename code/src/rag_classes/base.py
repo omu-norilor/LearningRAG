@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import faiss
 import numpy as np
 import ollama
@@ -50,11 +51,23 @@ class BaseRAG:
     def build_index(self):
         raise NotImplementedError("Subclasses must implement build_index()")
 
-    def raw_generate(self, prompt: str) -> str:
+    def raw_generate(self, system: str = "", prompt: str = "") -> str:
         response = self.client.generate(
-            model=self.model_name, prompt=prompt, raw=True, options={"temperature": 0.0, "num_predict": 128}
+            model=self.model_name,
+            prompt=prompt,
+            system=system,
+            think=False,
+            format={                          # <-- HERE, top-level
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+            },
+            options={"temperature": 0.0, "num_predict": 256, "num_ctx": 8192},
         )
-        return response["response"]
+        try:
+            return json.loads(response["response"])["answer"]
+        except (json.JSONDecodeError, KeyError):
+            return response["response"]       # fallback: let post-processor handle raw text
 
     def clean_completion(self, text: str) -> str:
         lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
@@ -73,18 +86,37 @@ class BaseRAG:
 
         return text.rstrip(".")
 
-    def assemble_prompt(self, retrieved_chunks: list[str], question: str) -> str:
+    def assemble_prompt(self, retrieved_chunks: list[str], question: str) -> (str, str):
         context_str = "\n\n".join(retrieved_chunks)
+
+
+        system = (
+            "You are an extractive QA system. Respond with ONLY the answer span, "
+            "copied verbatim from the context. No explanations, no quotes, no notes, "
+            "no parentheses. If the context does not contain the answer, respond "
+            "with only: Unanswerable"
+        )
+
         prompt = (
             f"Context:\n{context_str}\n\n"
-            f"Instructions:\n"
-            f"1. Answer the question using ONLY an exact word or short phrase directly from the context.\n"
-            f"2. If the context does not explicitly contain the answer, respond with EXACTLY 'Unanswerable'.\n"
-            f"3. Do not guess or use outside knowledge.\n\n"
-            f"Question: {question}\n"
-            f"Answer:"
+            f"Question: {question}\n\n"
+            "Correct response examples:\n"
+            "Question: Where were the matches played? -> Berlin\n"
+            "Question: What year did the conflict end? -> 1945\n"
+            "Question: How many spectators attended? -> Unanswerable\n\n"
+            "Answer with only the exact span (or 'Unanswerable'):"
         )
-        return prompt
+
+        # prompt = (
+        #     f"Context:\n{context_str}\n\n"
+        #     f"Instructions:\n"
+        #     f"1. Answer the question using ONLY an exact word or short phrase directly from the context.\n"
+        #     f"2. If the context does not explicitly contain the answer, respond with EXACTLY 'Unanswerable'.\n"
+        #     f"3. Do not guess or use outside knowledge.\n\n"
+        #     f"Question: {question}\n"
+        #     f"Answer:"
+        # )
+        return system, prompt
 
     def retrieve(self, question: str, k: int | None = None) -> list[str]:
         """Default dense retrieval using `self.dense_index`.
@@ -102,7 +134,7 @@ class BaseRAG:
     def run(self, question: str, top_k: int | None = None):
         k = top_k if top_k is not None else self.top_k
         retrieved_chunks = self.retrieve(question, k=k)
-        prompt = self.assemble_prompt(retrieved_chunks, question)
-        raw_output = self.raw_generate(prompt)
+        system, prompt = self.assemble_prompt(retrieved_chunks, question)
+        raw_output = self.raw_generate(system ,prompt)
         answer = self.clean_completion(raw_output)
         return prompt, answer, retrieved_chunks

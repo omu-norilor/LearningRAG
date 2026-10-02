@@ -17,7 +17,10 @@ from src.constants import HF_TOKEN
 rag=HyDERAG(
             dataset="rajpurkar/squad_v2",  
             split="validation[:200]",
-            model_name="llama3.2:3b", 
+            #model_name="llama3.2:3b", 
+            model_name="llama3.1:8b",
+            # model_name="qwen3:8b",
+            # model_name="qwen2.5:7b",
             top_k=3
             )
 

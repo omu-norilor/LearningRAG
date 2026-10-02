@@ -11,13 +11,13 @@ from rag_classes.hybrid_advanced import AdvancedHybridRAG
 from rag_classes.HyDE import HyDERAG
 from metrics import evaluate
 from constants import HF_TOKEN
-SETTING = 1
+SETTING = 3
 
 # --- Execution Script ---
 
-# Load 50 answerable questions for testing
+# Load 150 answerable questions for testing
 ds = load_dataset("rajpurkar/squad_v2", split="validation", token=HF_TOKEN)
-answerable_ds = ds.filter(lambda x: len(x["answers"]["text"]) > 0).select(range(50))
+answerable_ds = ds.filter(lambda x: len(x["answers"]["text"]) > 0).select(range(150))
 
 
 
@@ -62,13 +62,15 @@ if SETTING == 2:
     naive = NaiveRAG(
     dataset="rajpurkar/squad_v2",
     split="validation",
-    top_k=3
+    top_k=5,
+    model_name="qwen3:8b",
     )
 
     hybrid = HybridRAG(
     dataset="rajpurkar/squad_v2", 
     split="validation", 
-    top_k=3, 
+    top_k=5,
+    model_name="qwen3:8b",
     top_k_dense = 50,     # <-- INCREASED from 20 to 50
     top_k_sparse = 50,    # <-- INCREASED from 20 to 50
     )
@@ -81,7 +83,8 @@ if SETTING == 3:
     hybrid = HybridRAG(
     dataset="rajpurkar/squad_v2", 
     split="validation", 
-    top_k=3, 
+    top_k=5,
+    model_name="qwen3:8b",
     top_k_dense = 50,     # <-- INCREASED from 20 to 50
     top_k_sparse = 50,    # <-- INCREASED from 20 to 50
     )
@@ -89,7 +92,8 @@ if SETTING == 3:
     advanced_hybrid = AdvancedHybridRAG(
     dataset="rajpurkar/squad_v2",
     split="validation",
-    top_k=3,
+    top_k=5,
+    model_name="qwen3:8b",
     top_k_dense = 50,     # <-- INCREASED from 20 to 50
     top_k_sparse = 50,    # <-- INCREASED from 20 to 50
     )
@@ -98,16 +102,18 @@ if SETTING == 3:
     evaluate(advanced_hybrid, answerable_ds, "Advanced Hybrid RAG (Cross-Encoder)")
 
 if SETTING == 4:
-    naive = NaiveRAG(
+    naive = HybridRAG(
     dataset="rajpurkar/squad_v2",
     split="validation",
-    top_k=3
+    top_k=5,
+    model_name="qwen3:8b",
     )
 
     HyDE = HyDERAG(
     dataset="rajpurkar/squad_v2",
     split="validation",
-    top_k=3,
+    top_k=5,
+    model_name="qwen3:8b",
     )
     evaluate(naive, answerable_ds, "Naive RAG (Dense)")
     evaluate(HyDE, answerable_ds, "HyDE RAG (Dense + Hypotohetical Document Embeddings)")
