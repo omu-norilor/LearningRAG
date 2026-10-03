@@ -1,3 +1,4 @@
+# metrics.py
 import os
 import sys
 import string
@@ -6,6 +7,7 @@ import numpy as np
 from datasets import load_dataset
 from evaluate import load
 
+ANSWERABLE, UNANSWERABLE = "answerable", "unanswerable"
 
 
 # --- 1. Text Normalization & Extraction Metrics ---
@@ -48,6 +50,26 @@ def compute_token_f1(prediction: str, gold_answers: list[str]) -> float:
     return max(f1s) if f1s else 0.0
 
 
+def is_no_answer(answer: str) -> bool:
+    """True if the model output signals abstention ('Unanswerable' sentinel or refusal phrasing)."""
+    text = normalize_text(answer or "").replace("_", " ").strip()
+    if not text:
+        return True  # empty output counts as abstention
+    return any(re.search(p, text) for p in _ABSTENTION_PATTERNS)
+
+
+_ABSTENTION_PATTERNS = [
+    r"\bno ?answer\b", r"\bnot ?answerable\b", r"\bunanswerable\b",
+    r"\b(cannot|can ?t|could ?not) (answer|be answered|find|determine|locate)\b",
+    r"\b(don ?t|does ?not|doesnt) (know|mention|specify|provide|state|say|contain)\b",
+    r"\bnot (mentioned|specified|provided|stated|found|contained|available|given)\b",
+    r"\bnot (enough|sufficient) (information|context|detail)\b",
+    r"\bno (information|relevant information|details)\b",
+    r"\bnot in (the |this )?(context|passage|text|document)\b",
+    r"\bunable to (find|determine|answer)\b", r"\bunknown\b",
+]
+
+
 # --- 2. Retrieval Metrics ---
 
 def compute_retrieval_metrics(retrieved_chunks: list[str], gold_context: str, k_values: list[int] = [1, 3, 5]) -> dict:
@@ -72,13 +94,16 @@ def compute_retrieval_metrics(retrieved_chunks: list[str], gold_context: str, k_
 
 # --- 3. Diagnostic & Classification Metric ---
 
-def diagnose_failure(retrieved_correctly: bool, exact_match: bool) -> str:
-    """Categorizes the sample failure type."""
-    if not retrieved_correctly:
-        return "Retrieval Miss"
-    elif not exact_match:
-        return "Generation/Extraction Miss"
-    return "Success"
+def diagnose_failure(is_answerable: bool, retrieved_correctly: bool, f1: float, abstained: bool,
+                     f1_threshold: float = 0.5) -> str:
+    """Categorizes the sample failure type. Success = retrieval hit + token F1 >= threshold."""
+    if is_answerable:
+        if not retrieved_correctly:
+            return "Retrieval Miss"
+        if f1 >= f1_threshold:
+            return "Success"
+        return "False Abstention" if abstained else "Generation/Extraction Miss"
+    return "Correct Abstention" if abstained else "False Answer"
 
 
 # --- 4. Master Evaluation Function ---
@@ -94,28 +119,41 @@ def evaluate(rag_instance, dataset, name="RAG"):
     total_samples = len(dataset)
     retrieval_recalls = {1: 0.0, 3: 0.0, 5: 0.0}
     mrr_total = 0.0
-    f1_scores = []
-    failure_counts = {"Success": 0, "Retrieval Miss": 0, "Generation/Extraction Miss": 0}
+    em_scores = {ANSWERABLE: [], UNANSWERABLE: []}
+    f1_scores = {ANSWERABLE: [], UNANSWERABLE: []}
+    failure_counts = {"Success": 0, "Retrieval Miss": 0, "Generation/Extraction Miss": 0,
+                      "False Abstention": 0, "Correct Abstention": 0, "False Answer": 0}
     
     for sample in dataset:
         # Run RAG
         prompt, answer, retrieved_chunks = rag_instance.run(sample["question"])
+
+        gold_answers = sample["answers"]["text"]
+        is_answerable = len(gold_answers) > 0
+        cls = ANSWERABLE if is_answerable else UNANSWERABLE
+        abstained = is_no_answer(answer)
         
         # Collect for HuggingFace SQuAD evaluation
         predictions.append({
             "id": sample["id"],
-            "prediction_text": answer,
-            "no_answer_probability": 0.0
+            "prediction_text": "" if abstained else answer,
+            "no_answer_probability": 1.0 if abstained else 0.0
         })
         references.append({
             "id": sample["id"],
             "answers": sample["answers"]
         })
         
-        # 1. Extraction Metrics (F1)
-        gold_answers = sample["answers"]["text"]
-        sample_f1 = compute_token_f1(answer, gold_answers)
-        f1_scores.append(sample_f1)
+        # 1. Extraction Metrics (EM / F1, per class)
+        if is_answerable:
+            sample_f1 = compute_token_f1(answer, gold_answers)
+            norm_pred = normalize_text(answer)
+            is_em = any(norm_pred == normalize_text(g) for g in gold_answers)
+        else:
+            sample_f1 = 1.0 if abstained else 0.0
+            is_em = abstained
+        em_scores[cls].append(float(is_em))
+        f1_scores[cls].append(sample_f1)
         
         # 2. Retrieval Metrics
         gold_context = sample["context"]
@@ -126,34 +164,55 @@ def evaluate(rag_instance, dataset, name="RAG"):
         mrr_total += ret_metrics["mrr"]
         
         # 3. Diagnostic Categorization
-        # Check standard normalized match for diagnostic purposes
-        norm_pred = normalize_text(answer)
-        is_em = any(norm_pred == normalize_text(g) for g in gold_answers)
         retrieved_correctly = ret_metrics["recall@3"] > 0.0  # evaluated based on top_k=3
-        
-        failure_type = diagnose_failure(retrieved_correctly, is_em)
+        failure_type = diagnose_failure(is_answerable, retrieved_correctly, sample_f1, abstained)
         failure_counts[failure_type] += 1
 
     # Compute official metrics via HuggingFace
-    squad_results = squad_metric.compute(predictions=predictions, references=references)
+    try:
+        squad_results = squad_metric.compute(predictions=predictions, references=references,
+                                             no_answer_threshold=0.5)
+    except TypeError:  # older `evaluate` versions without the kwarg
+        squad_results = squad_metric.compute(predictions=predictions, references=references)
     
     # Average out custom metrics
-    avg_f1_custom = np.mean(f1_scores) * 100
+    avg_f1_custom = np.mean(f1_scores[ANSWERABLE] + f1_scores[UNANSWERABLE]) * 100
     avg_mrr = (mrr_total / total_samples)
     avg_recall_1 = (retrieval_recalls[1] / total_samples) * 100
     avg_recall_3 = (retrieval_recalls[3] / total_samples) * 100
     avg_recall_5 = (retrieval_recalls[5] / total_samples) * 100
 
+    def mean(xs):
+        return float(np.mean(xs)) if xs else 0.0
+
     print(f"\n[Generation / Extraction Metrics]")
-    print(f"  Exact Match: {squad_results['exact']:.2f}% | HF F1: {squad_results['f1']:.2f}% | Custom Token F1: {avg_f1_custom:.2f}%")
+    for c in (ANSWERABLE, UNANSWERABLE):
+        label = "Answerable" if c == ANSWERABLE else "Unanswerable"
+        print(f"  {label:<14} (n={len(f1_scores[c])}): EM {100 * mean(em_scores[c]):6.2f}% | Token F1 {100 * mean(f1_scores[c]):6.2f}%")
+    print(f"  {'Overall (official)':<14}: EM {squad_results['exact']:.2f}% | HF F1 {squad_results['f1']:.2f}% | Custom Token F1: {avg_f1_custom:.2f}%")
+    print(f"  {'':<14}  HasAns EM/F1: {squad_results['HasAns_exact']:.2f}/{squad_results['HasAns_f1']:.2f} | NoAns EM/F1: {squad_results['NoAns_exact']:.2f}/{squad_results['NoAns_f1']:.2f}")
     
     print(f"\n[Retrieval Metrics]")
     print(f"  Recall@1: {avg_recall_1:.2f}% | Recall@3: {avg_recall_3:.2f}% | Recall@5: {avg_recall_5:.2f}% | MRR: {avg_mrr:.4f}")
     
+        # per-class denominators: each category only occurs within one class
+    class_n = {ANSWERABLE: len(f1_scores[ANSWERABLE]), UNANSWERABLE: len(f1_scores[UNANSWERABLE])}
+    diag_class = {"Success": ANSWERABLE, "Retrieval Miss": ANSWERABLE,
+                  "Generation/Extraction Miss": ANSWERABLE, "False Abstention": ANSWERABLE,
+                  "Correct Abstention": UNANSWERABLE, "False Answer": UNANSWERABLE}
+
     print(f"\n[Diagnostic Breakdown]")
-    for category, count in failure_counts.items():
-        pct = (count / total_samples) * 100
-        print(f"  {category}: {count}/{total_samples} ({pct:.1f}%)")
+    diag_groups = (
+        ("Answerable", ("Success", "Retrieval Miss", "Generation/Extraction Miss", "False Abstention"),
+         len(f1_scores[ANSWERABLE])),
+        ("Unanswerable", ("Correct Abstention", "False Answer"),
+         len(f1_scores[UNANSWERABLE])),
+    )
+    for label, categories, n in diag_groups:
+        print(f"  {label} (n={n})")
+        for category in categories:
+            count = failure_counts.get(category, 0)
+            print(f"    {category}: {count}/{n} ({100 * count / max(n, 1):.1f}%)")
     print("-" * 50)
     
     return {
@@ -161,5 +220,9 @@ def evaluate(rag_instance, dataset, name="RAG"):
         "custom_f1": avg_f1_custom,
         "recall_at_3": avg_recall_3,
         "mrr": avg_mrr,
-        "diagnostics": failure_counts
+        "diagnostics": failure_counts,
+        "per_class": {
+            "answerable": {"n": len(em_scores[ANSWERABLE]), "em": mean(em_scores[ANSWERABLE]), "f1": mean(f1_scores[ANSWERABLE])},
+            "unanswerable": {"n": len(em_scores[UNANSWERABLE]), "em": mean(em_scores[UNANSWERABLE]), "f1": mean(f1_scores[UNANSWERABLE])},
+        },
     }

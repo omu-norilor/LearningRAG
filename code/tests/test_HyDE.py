@@ -9,12 +9,12 @@ from sentence_transformers import SentenceTransformer
 
 # Append the parent directory (..) to sys.path so Python can locate the 'src' package
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.rag_classes.hybrid import HybridRAG
+from src.rag_classes.HyDE import HyDERAG
 from src.constants import HF_TOKEN
 
 
 # Init the RAG system
-rag=HybridRAG(
+rag=HyDERAG(
             dataset="rajpurkar/squad_v2",  
             split="validation[:200]",
             model_name="llama3.2:3b", 
