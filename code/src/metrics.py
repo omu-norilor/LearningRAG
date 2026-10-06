@@ -119,6 +119,8 @@ def evaluate(rag_instance, dataset, name="RAG"):
     total_samples = len(dataset)
     retrieval_recalls = {1: 0.0, 3: 0.0, 5: 0.0}
     mrr_total = 0.0
+    ret_by_class = {c: {1: 0.0, 3: 0.0, 5: 0.0} for c in (ANSWERABLE, UNANSWERABLE)}
+    mrr_by_class = {ANSWERABLE: 0.0, UNANSWERABLE: 0.0}
     em_scores = {ANSWERABLE: [], UNANSWERABLE: []}
     f1_scores = {ANSWERABLE: [], UNANSWERABLE: []}
     failure_counts = {"Success": 0, "Retrieval Miss": 0, "Generation/Extraction Miss": 0,
@@ -162,6 +164,9 @@ def evaluate(rag_instance, dataset, name="RAG"):
         retrieval_recalls[3] += ret_metrics["recall@3"]
         retrieval_recalls[5] += ret_metrics["recall@5"]
         mrr_total += ret_metrics["mrr"]
+        for k in (1, 3, 5):
+            ret_by_class[cls][k] += ret_metrics[f"recall@{k}"]
+        mrr_by_class[cls] += ret_metrics["mrr"]
         
         # 3. Diagnostic Categorization
         retrieved_correctly = ret_metrics["recall@3"] > 0.0  # evaluated based on top_k=3
@@ -193,14 +198,13 @@ def evaluate(rag_instance, dataset, name="RAG"):
     print(f"  {'':<14}  HasAns EM/F1: {squad_results['HasAns_exact']:.2f}/{squad_results['HasAns_f1']:.2f} | NoAns EM/F1: {squad_results['NoAns_exact']:.2f}/{squad_results['NoAns_f1']:.2f}")
     
     print(f"\n[Retrieval Metrics]")
-    print(f"  Recall@1: {avg_recall_1:.2f}% | Recall@3: {avg_recall_3:.2f}% | Recall@5: {avg_recall_5:.2f}% | MRR: {avg_mrr:.4f}")
+    for c in (ANSWERABLE, UNANSWERABLE):
+        n_c = max(len(f1_scores[c]), 1)
+        label = "Answerable" if c == ANSWERABLE else "Unanswerable"
+        r = ret_by_class[c]
+        print(f"  {label:<14}: R@1 {100*r[1]/n_c:6.2f}% | R@3 {100*r[3]/n_c:6.2f}% | R@5 {100*r[5]/n_c:6.2f}% | MRR {mrr_by_class[c]/n_c:.4f}")  # NEW
+    print(f"  {'Overall':<14}: Recall@1: {avg_recall_1:.2f}% | Recall@3: {avg_recall_3:.2f}% | Recall@5: {avg_recall_5:.2f}% | MRR: {avg_mrr:.4f}")
     
-        # per-class denominators: each category only occurs within one class
-    class_n = {ANSWERABLE: len(f1_scores[ANSWERABLE]), UNANSWERABLE: len(f1_scores[UNANSWERABLE])}
-    diag_class = {"Success": ANSWERABLE, "Retrieval Miss": ANSWERABLE,
-                  "Generation/Extraction Miss": ANSWERABLE, "False Abstention": ANSWERABLE,
-                  "Correct Abstention": UNANSWERABLE, "False Answer": UNANSWERABLE}
-
     print(f"\n[Diagnostic Breakdown]")
     diag_groups = (
         ("Answerable", ("Success", "Retrieval Miss", "Generation/Extraction Miss", "False Abstention"),
@@ -222,7 +226,11 @@ def evaluate(rag_instance, dataset, name="RAG"):
         "mrr": avg_mrr,
         "diagnostics": failure_counts,
         "per_class": {
-            "answerable": {"n": len(em_scores[ANSWERABLE]), "em": mean(em_scores[ANSWERABLE]), "f1": mean(f1_scores[ANSWERABLE])},
-            "unanswerable": {"n": len(em_scores[UNANSWERABLE]), "em": mean(em_scores[UNANSWERABLE]), "f1": mean(f1_scores[UNANSWERABLE])},
+            "answerable": {"n": len(em_scores[ANSWERABLE]), "em": mean(em_scores[ANSWERABLE]), "f1": mean(f1_scores[ANSWERABLE]),
+                           "recall": {k: ret_by_class[ANSWERABLE][k] / max(len(f1_scores[ANSWERABLE]), 1) for k in (1, 3, 5)},
+                           "mrr": mrr_by_class[ANSWERABLE] / max(len(f1_scores[ANSWERABLE]), 1)},
+            "unanswerable": {"n": len(em_scores[UNANSWERABLE]), "em": mean(em_scores[UNANSWERABLE]), "f1": mean(f1_scores[UNANSWERABLE]),
+                             "recall": {k: ret_by_class[UNANSWERABLE][k] / max(len(f1_scores[UNANSWERABLE]), 1) for k in (1, 3, 5)},
+                             "mrr": mrr_by_class[UNANSWERABLE] / max(len(f1_scores[UNANSWERABLE]), 1)},
         },
     }

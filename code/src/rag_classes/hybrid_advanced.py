@@ -28,6 +28,7 @@ class AdvancedHybridRAG(HybridRAG):
         dense_weight: float = 0.7,
         sparse_weight: float = 0.3,
         rerank_depth: int = 30,
+        alpha: float = 1,
         dataset: str = "rajpurkar/squad_v2",
         split: str = "validation[:200]",
         model_name: str = "llama3.2:3b",
@@ -53,6 +54,7 @@ class AdvancedHybridRAG(HybridRAG):
             embedding_model=embedding_model,
             extra_split=extra_split,              # Fix 1: forwarded
         )
+        self.alpha = alpha                          # Fix 2: stage-2 blending weight
 
         print(f"Loading Cross-Encoder ({self.reranker_model})...")
         self.reranker = CrossEncoder(self.reranker_model)
@@ -68,6 +70,13 @@ class AdvancedHybridRAG(HybridRAG):
         pairs = [[question, self.unique_contexts[doc_id]] for doc_id in candidate_ids]
         scores = self.reranker.predict(pairs, batch_size=32)
 
-        order = np.argsort(scores)[::-1][:k]
+        # Blend fusion andn cross-encoder scores using Reciprocal Rank Fusion (RRF), if desired
+        ce = np.asarray(scores, dtype=np.float32)
+        rrf = np.array([1.0 / (self.rrf_k + i + 1) for i in range(len(candidate_ids))],
+                       dtype=np.float32)
+        norm = lambda x: (x - x.min()) / (x.max() - x.min()) if x.max() > x.min() else np.zeros_like(x)
+        blended = self.alpha * norm(ce) + (1 - self.alpha) * norm(rrf)
+        order = np.argsort(blended)[::-1][:k]
+
         return [self.unique_contexts[candidate_ids[i]] for i in order]
 
