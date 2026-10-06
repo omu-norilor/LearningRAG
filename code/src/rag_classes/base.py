@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import faiss
 import numpy as np
 import ollama
@@ -30,6 +31,7 @@ class BaseRAG:
         split: str = "validation[:200]",
         model_name: str = "llama3.2:3b",
         embedding_model: str = "BAAI/bge-small-en-v1.5",
+        extra_split: str | None = None,
     ):
         # Force offline mode to use local cache and avoid name resolution timeouts
         os.environ["HF_HUB_OFFLINE"] = "1"
@@ -44,12 +46,39 @@ class BaseRAG:
         self.dataset = dataset
         self.split = split
         self.model_name = model_name
+        self.extra_split = extra_split
 
         # Subclass must implement build_index()
         self.build_index()
 
     def build_index(self):
         raise NotImplementedError("Subclasses must implement build_index()")
+
+    def load_corpus_contexts(self) -> list[str]:
+        """Unique paragraphs from `self.split`, plus optional distractors from `self.extra_split`."""
+        dataset = load_dataset(
+            self.dataset,
+            split=self.split,
+            download_mode="reuse_cache_if_exists",
+            verification_mode="no_checks",
+        )
+        contexts = list(dict.fromkeys(dataset["context"]))
+        print(f"Extracted {len(contexts)} unique paragraphs from '{self.split}'.")
+
+        if self.extra_split:
+            extra_ds = load_dataset(
+                self.dataset,
+                split=self.extra_split,
+                download_mode="reuse_cache_if_exists",
+                verification_mode="no_checks",
+            )
+            seen = set(contexts)
+            distractors = [c for c in dict.fromkeys(extra_ds["context"]) if c not in seen]
+            print(f"Added {len(distractors)} distractor paragraphs from '{self.extra_split}'.")
+            contexts.extend(distractors)
+
+        print(f"Index corpus: {len(contexts)} paragraphs.")
+        return contexts
 
     def raw_generate(self, system: str = "", prompt: str = "") -> dict:
         response = self.client.generate(

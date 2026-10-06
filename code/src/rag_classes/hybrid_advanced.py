@@ -9,8 +9,12 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 from rank_bm25 import BM25Okapi
 from .hybrid import HybridRAG
 
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
 # append sys path to locate the 'src' package
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from constants import HF_TOKEN
 
 
@@ -23,16 +27,19 @@ class AdvancedHybridRAG(HybridRAG):
         rrf_k: int = 60,
         dense_weight: float = 0.7,
         sparse_weight: float = 0.3,
+        rerank_depth: int = 30,
         dataset: str = "rajpurkar/squad_v2",
         split: str = "validation[:200]",
         model_name: str = "llama3.2:3b",
         embedding_model: str = "BAAI/bge-small-en-v1.5",
-        reranker_model: str = "BAAI/bge-reranker-base",
+        extra_split: str | None = None,
+        reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
     ):
-        # Set reranker-specific parameter before parent initializers run
+        # set reranker-specific params before parent initializers run
+        self.rerank_depth = rerank_depth          # Fix 3: stage-1 pool = the ceiling
         self.reranker_model = reranker_model
-        
-        # Initialize parent HybridRAG (which builds dense/sparse indices)
+
+        # parent HybridRAG builds dense + sparse indexes and the corpus (incl. extra_split)
         super().__init__(
             top_k=top_k,
             top_k_dense=top_k_dense,
@@ -44,41 +51,23 @@ class AdvancedHybridRAG(HybridRAG):
             split=split,
             model_name=model_name,
             embedding_model=embedding_model,
+            extra_split=extra_split,              # Fix 1: forwarded
         )
-        
+
         print(f"Loading Cross-Encoder ({self.reranker_model})...")
         self.reranker = CrossEncoder(self.reranker_model)
-
 
     def retrieve(self, question: str, k: int | None = None) -> list[str]:
         k = k if k is not None else self.top_k
 
-        # 1. Dense Retrieval (using parent configuration)
-        q_emb = self.embedder.encode([question], normalize_embeddings=True)
-        _, dense_indices = self.dense_index.search(np.array(q_emb, dtype=np.float32), self.top_k_dense)
-        dense_ranked_ids = dense_indices[0].tolist()
+        # Stage 1 — the SAME fusion as the baseline, truncated to the reranker's pool
+        candidate_ids = self.get_fused_ranking(question)[: self.rerank_depth]
+        self.last_candidate_ids = candidate_ids   # exposed for stage-1 ceiling metrics
 
-        # 2. Sparse Retrieval (using parent BM25 index)
-        tokenized_query = question.lower().split(" ")
-        sparse_scores = self.bm25_index.get_scores(tokenized_query)
-        sparse_ranked_ids = np.argsort(sparse_scores)[::-1][: self.top_k_sparse].tolist()
-
-        # 3. Hybrid Fusion via RRF (pooling a wider candidate set for re-ranking, e.g., top 15)
-        scores: dict[int, float] = {}
-        for rank, doc_id in enumerate(dense_ranked_ids):
-            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (self.rrf_k + rank + 1)
-        for rank, doc_id in enumerate(sparse_ranked_ids):
-            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (self.rrf_k + rank + 1)
-        
-        rrf_sorted = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-        candidate_ids = [doc_id for doc_id, _ in rrf_sorted[:15]]
-
-        # 4. Cross-Encoder Re-ranking
+        # Stage 2 — cross-encoder reads (question, paragraph) pairs and re-ranks
         pairs = [[question, self.unique_contexts[doc_id]] for doc_id in candidate_ids]
-        rerank_scores = self.reranker.predict(pairs)
-        
-        ranked_pairs = sorted(zip(candidate_ids, rerank_scores), key=lambda x: x[1], reverse=True)
-        final_ids = [doc_id for doc_id, _ in ranked_pairs[:k]]
+        scores = self.reranker.predict(pairs, batch_size=32)
 
-        retrieved_chunks = [self.unique_contexts[idx] for idx in final_ids]
-        return retrieved_chunks
+        order = np.argsort(scores)[::-1][:k]
+        return [self.unique_contexts[candidate_ids[i]] for i in order]
+

@@ -17,38 +17,38 @@ from constants import HF_TOKEN
 # --- Execution Script ---
 
 # Load 150 answerable questions for testing
-balanced_ds = build_balanced_eval_set(n_per_class=75, seed=42)   # same set for both models
+balanced_ds = build_balanced_eval_set(n_per_class=100, seed=42)   # same set for both models
 
 # ------ Test cases ------
-SETTING = 2
+SETTING = 3
 if SETTING == 1:
     # Compare LLM models within the NaiveRAG framework
     naive_llama32_3b = NaiveRAG(
-    dataset="rajpurkar/squad_v2",
-    split="validation",
-    top_k=5,
-    model_name="llama3.2:3b",
+        dataset="rajpurkar/squad_v2",
+        split="validation",
+        top_k=5,
+        model_name="llama3.2:3b",
     )
 
     naive_llama31_8b = NaiveRAG(
-    dataset="rajpurkar/squad_v2",
-    split="validation",
-    top_k=5,
-    model_name="llama3.1:8b",
+        dataset="rajpurkar/squad_v2",
+        split="validation",
+        top_k=5,
+        model_name="llama3.1:8b",
     )
 
     naive_qwen3_8b = NaiveRAG(
-    dataset="rajpurkar/squad_v2",
-    split="validation",
-    top_k=5,
-    model_name="qwen3:8b",
+        dataset="rajpurkar/squad_v2",
+        split="validation",
+        top_k=5,
+        model_name="qwen3:8b",
     )
 
     naive_qwen25_7b = NaiveRAG(
-    dataset="rajpurkar/squad_v2",
-    split="validation",
-    top_k=5,
-    model_name="qwen2.5:7b",
+        dataset="rajpurkar/squad_v2",
+        split="validation",
+        top_k=5,
+        model_name="qwen2.5:7b",
     )
 
     evaluate(naive_llama32_3b, balanced_ds, "Naive RAG (Dense) - LLaMA 3.2:3B")
@@ -59,19 +59,21 @@ if SETTING == 1:
 
 if SETTING == 2:
     naive = NaiveRAG(
-    dataset="rajpurkar/squad_v2",
-    split="validation",
-    top_k=5,
-    model_name="qwen3:8b",
+        dataset="rajpurkar/squad_v2",
+        split="validation",
+        extra_split="train[:25000]",
+        top_k=5,
+        model_name="qwen3:8b",
     )
 
     hybrid = HybridRAG(
-    dataset="rajpurkar/squad_v2", 
-    split="validation", 
-    top_k=5,
-    model_name="qwen3:8b",
-    top_k_dense = 50,
-    top_k_sparse = 50,
+        dataset="rajpurkar/squad_v2", 
+        split="validation",
+        extra_split="train[:25000]",
+        top_k=5,
+        model_name="qwen3:8b",
+        top_k_dense = 50,
+        top_k_sparse = 50,
     )
 
     evaluate(naive, balanced_ds, "Naive RAG (Dense)")
@@ -80,21 +82,25 @@ if SETTING == 2:
 
 if SETTING == 3:
     hybrid = HybridRAG(
-    dataset="rajpurkar/squad_v2", 
-    split="validation", 
-    top_k=5,
-    model_name="qwen3:8b",
-    top_k_dense = 50,     # <-- INCREASED from 20 to 50
-    top_k_sparse = 50,    # <-- INCREASED from 20 to 50
+        dataset="rajpurkar/squad_v2", 
+        split="validation",
+        extra_split="train[:25000]",
+        top_k=5,
+        model_name="qwen3:8b",
+        top_k_dense = 50,
+        top_k_sparse = 50,
     )
 
     advanced_hybrid = AdvancedHybridRAG(
-    dataset="rajpurkar/squad_v2",
-    split="validation",
-    top_k=5,
-    model_name="qwen3:8b",
-    top_k_dense = 50,     # <-- INCREASED from 20 to 50
-    top_k_sparse = 50,    # <-- INCREASED from 20 to 50
+        dataset="rajpurkar/squad_v2",
+        split="validation",
+        extra_split="train[:25000]",
+        top_k=5,
+        model_name="qwen3:8b",
+        top_k_dense = 50,
+        top_k_sparse = 50,
+        rerank_depth = 30,
+        reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
     )
 
     evaluate(hybrid, balanced_ds, "Hybrid RAG (BM25 + Dense)")
@@ -102,17 +108,17 @@ if SETTING == 3:
 
 if SETTING == 4:
     naive = HybridRAG(
-    dataset="rajpurkar/squad_v2",
-    split="validation",
-    top_k=5,
-    model_name="qwen3:8b",
+        dataset="rajpurkar/squad_v2",
+        split="validation",
+        top_k=5,
+        model_name="qwen3:8b",
     )
 
     HyDE = HyDERAG(
-    dataset="rajpurkar/squad_v2",
-    split="validation",
-    top_k=5,
-    model_name="qwen3:8b",
+        dataset="rajpurkar/squad_v2",
+        split="validation",
+        top_k=5,
+        model_name="qwen3:8b",
     )
     evaluate(naive, balanced_ds, "Naive RAG (Dense)")
     evaluate(HyDE, balanced_ds, "HyDE RAG (Dense + Hypotohetical Document Embeddings)")

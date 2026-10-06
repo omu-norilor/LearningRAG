@@ -23,22 +23,28 @@ class NaiveRAG(BaseRAG):
         split: str = "validation[:200]",
         model_name: str = "llama3.2:3b",
         embedding_model: str = "BAAI/bge-small-en-v1.5",
+        extra_split: str | None = None,
     ):
-        super().__init__(top_k=top_k, dataset=dataset, split=split, model_name=model_name, embedding_model=embedding_model)
+        super().__init__(
+            top_k=top_k,
+            dataset=dataset,
+            split=split,
+            model_name=model_name,
+            embedding_model=embedding_model,
+            extra_split=extra_split,
+        )
 
     def build_index(self):
         print("Loading SQuAD 2.0 validation split...")
-        dataset = load_dataset(
-            self.dataset, 
-            split=self.split, 
-            download_mode="reuse_cache_if_exists", 
-            verification_mode="no_checks"
-        )
-        unique_contexts = list(dict.fromkeys(dataset["context"]))
-        print(f"Extracted {len(unique_contexts)} unique context paragraphs.")
+        unique_contexts = self.load_corpus_contexts()
 
         print("Generating embeddings with BAAI/bge-small-en-v1.5...")
-        context_embeddings = self.embedder.encode(unique_contexts, normalize_embeddings=True)
+        context_embeddings = self.embedder.encode(
+            unique_contexts,
+            normalize_embeddings=True,
+            batch_size=64,
+            show_progress_bar=True,
+        )
 
         dimension = context_embeddings.shape[1]
         dense_index = faiss.IndexFlatIP(dimension)  # Inner product for normalized cosine similarity

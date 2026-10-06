@@ -27,6 +27,7 @@ class HybridRAG(BaseRAG):
         split: str = "validation[:200]",
         model_name: str = "llama3.2:3b",
         embedding_model: str = "BAAI/bge-small-en-v1.5",
+        extra_split: str | None = None,
     ):
         # set hybrid-specific params first so build_index() can use them
         self.top_k_dense = top_k_dense
@@ -35,22 +36,27 @@ class HybridRAG(BaseRAG):
         self.dense_weight = dense_weight
         self.sparse_weight = sparse_weight
 
-        super().__init__(top_k=top_k, dataset=dataset, split=split, model_name=model_name, embedding_model=embedding_model)
+        super().__init__(
+            top_k=top_k,
+            dataset=dataset,
+            split=split,
+            model_name=model_name,
+            embedding_model=embedding_model,
+            extra_split=extra_split,
+        )
 
     def build_index(self):
         print(f"Loading {self.dataset} dataset ({self.split})...")
-        dataset = load_dataset(
-            self.dataset, 
-            split=self.split, 
-            download_mode="reuse_cache_if_exists", 
-            verification_mode="no_checks"
-        )
-        unique_contexts = list(dict.fromkeys(dataset["context"]))
-        print(f"Extracted {len(unique_contexts)} unique context paragraphs.")
+        unique_contexts = self.load_corpus_contexts()
 
         # 1. Build FAISS Dense Index
         print("Generating dense embeddings...")
-        context_embeddings = self.embedder.encode(unique_contexts, normalize_embeddings=True)
+        context_embeddings = self.embedder.encode(
+            unique_contexts,
+            normalize_embeddings=True,
+            batch_size=64,
+            show_progress_bar=True,
+        )
         dimension = context_embeddings.shape[1]
         dense_index = faiss.IndexFlatIP(dimension)
         dense_index.add(np.array(context_embeddings, dtype=np.float32))
@@ -69,24 +75,21 @@ class HybridRAG(BaseRAG):
 
         return unique_contexts, dense_index, bm25_index
 
-
     def reciprocal_rank_fusion(self, dense_ranks: list[int], sparse_ranks: list[int]) -> list[int]:
-        """Fuses dense and sparse rank lists using Weighted Reciprocal Rank Fusion (RRF)."""
+        """Fuses dense and sparse rank lists using Weighted RRF.
+        Returns the FULL fused ranking (truncation happens in retrieve())."""
         scores: dict[int, float] = {}
-
         for rank, doc_id in enumerate(dense_ranks):
-            scores[doc_id] = scores.get(doc_id, 0.0) + self.dense_weight * (1.0 / (self.rrf_k + rank + 1)) # <-- UPDATED
-
+            scores[doc_id] = scores.get(doc_id, 0.0) + self.dense_weight / (self.rrf_k + rank + 1)
         for rank, doc_id in enumerate(sparse_ranks):
-            scores[doc_id] = scores.get(doc_id, 0.0) + self.sparse_weight * (1.0 / (self.rrf_k + rank + 1)) # <-- UPDATED
-
+            scores[doc_id] = scores.get(doc_id, 0.0) + self.sparse_weight / (self.rrf_k + rank + 1)
         sorted_docs = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-        return [doc_id for doc_id, _ in sorted_docs[: self.top_k]]
+        return [doc_id for doc_id, _ in sorted_docs]
 
-
-    def retrieve(self, question: str, k: int | None = None) -> list[str]:
-        k = k if k is not None else self.top_k
-
+    def get_fused_ranking(self, question: str) -> list[int]:
+        """Stage-1: dense + sparse retrieval, fused with weighted RRF.
+        Single source of truth for HybridRAG and AdvancedHybridRAG —
+        guarantees the reranker is the ONLY delta between the two systems."""
         # 1. Dense Retrieval
         q_emb = self.embedder.encode([question], normalize_embeddings=True)
         _, dense_indices = self.dense_index.search(np.array(q_emb, dtype=np.float32), self.top_k_dense)
@@ -98,7 +101,10 @@ class HybridRAG(BaseRAG):
         sparse_ranked_ids = np.argsort(sparse_scores)[::-1][: self.top_k_sparse].tolist()
 
         # 3. Hybrid Fusion via RRF
-        retrieved_ids = self.reciprocal_rank_fusion(dense_ranked_ids, sparse_ranked_ids)[:k]
-        retrieved_chunks = [self.unique_contexts[idx] for idx in retrieved_ids]
+        return self.reciprocal_rank_fusion(dense_ranked_ids, sparse_ranked_ids)
 
+    def retrieve(self, question: str, k: int | None = None) -> list[str]:
+        k = k if k is not None else self.top_k
+        retrieved_ids = self.get_fused_ranking(question)[:k]
+        retrieved_chunks = [self.unique_contexts[idx] for idx in retrieved_ids]
         return retrieved_chunks
